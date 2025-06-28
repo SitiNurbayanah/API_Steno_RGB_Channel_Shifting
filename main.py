@@ -168,18 +168,20 @@ def home():
     """API information endpoint"""
     return jsonify({
         'service': 'Steganography API',
-        'version': '1.0.0',
+        'version': '1.1.0',
         'status': 'running',
         'description': 'RGB Channel Steganography API',
         'endpoints': {
             'GET /': 'API information',
             'GET /health': 'Health check',
-            'POST /encode': 'Encode message into image',
+            'POST /encode': 'Encode message into image (returns JSON with base64)',
+            'POST /encode-download': 'Encode message into image (returns file for download)',
             'POST /decode': 'Decode message from image',
             'POST /info': 'Get image capacity information'
         },
         'usage': {
             'encode': 'Send multipart form with "image" file and "message" text, optional "channel" (R/G/B/ALL)',
+            'encode-download': 'Same as encode but returns file directly for download',
             'decode': 'Send multipart form with "image" file and optional "channel" (R/G/B/ALL)',
             'info': 'Send multipart form with "image" file'
         }
@@ -195,7 +197,7 @@ def health():
 
 @app.route('/encode', methods=['POST'])
 def encode():
-    """Encode message into image"""
+    """Encode message into image - returns JSON with base64"""
     try:
         # Validate request
         if 'image' not in request.files:
@@ -251,6 +253,66 @@ def encode():
                 'output_format': 'PNG'
             }
         })
+        
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/encode-download', methods=['POST'])
+def encode_download():
+    """Encode message into image - returns file directly for download"""
+    try:
+        # Validate request
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        if 'message' not in request.form:
+            return jsonify({'error': 'No message provided'}), 400
+        
+        file = request.files['image']
+        message = request.form['message']
+        channel = request.form.get('channel', 'R').upper()
+        
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'File type not supported'}), 400
+        
+        if channel not in ['R', 'G', 'B', 'ALL']:
+            return jsonify({'error': 'Channel must be R, G, B, or ALL'}), 400
+        
+        if not message.strip():
+            return jsonify({'error': 'Message cannot be empty'}), 400
+        
+        # Load image
+        try:
+            image = Image.open(file.stream)
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}'}), 400
+        
+        # Encode message
+        success, result = RGBChannelSteganography.encode_message(image, message, channel)
+        
+        if not success:
+            return jsonify({'error': result}), 400
+        
+        # Create file buffer
+        img_buffer = io.BytesIO()
+        result.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        
+        # Generate download filename
+        original_name = secure_filename(file.filename)
+        name_without_ext = os.path.splitext(original_name)[0]
+        download_filename = f"encoded_{name_without_ext}_{channel}.png"
+        
+        # Return file for download
+        return send_file(
+            img_buffer,
+            mimetype='image/png',
+            as_attachment=True,
+            download_name=download_filename
+        )
         
     except Exception as e:
         return jsonify({'error': f'Server error: {str(e)}'}), 500
